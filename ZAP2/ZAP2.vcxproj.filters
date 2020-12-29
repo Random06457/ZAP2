@@ -19,9 +19,6 @@
     <Filter Include="Source Files\Libraries">
       <UniqueIdentifier>{02148456-5068-4613-8478-f10addc58e70}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\Libraries\OpenFBX">
-      <UniqueIdentifier>{34eda0d2-f599-4610-a75c-716189ee4363}</UniqueIdentifier>
-    </Filter>
     <Filter Include="Header Files\Libraries">
       <UniqueIdentifier>{bcab3136-95ba-4839-833c-43d78ad6e335}</UniqueIdentifier>
     </Filter>
@@ -54,6 +51,12 @@
     </Filter>
     <Filter Include="Source Files\HighLevel">
       <UniqueIdentifier>{0f9980bb-ae46-4891-a39e-275bf255f010}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\HighLevel\Room">
+      <UniqueIdentifier>{11dbd8e6-d97a-42a5-b40c-e1350389544d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Libraries\fbx">
+      <UniqueIdentifier>{be9a5be0-ec6a-4200-8e39-bb58c7da7aa8}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -141,12 +144,6 @@
     <ClCompile Include="ZRoom\Commands\SetCutscenes.cpp">
       <Filter>Source Files\Z64\ZRoom\Commands</Filter>
     </ClCompile>
-    <ClCompile Include="OpenFBX\ofbx.cpp">
-      <Filter>Source Files\Libraries\OpenFBX</Filter>
-    </ClCompile>
-    <ClCompile Include="OpenFBX\miniz.cpp">
-      <Filter>Source Files\Libraries\OpenFBX</Filter>
-    </ClCompile>
     <ClCompile Include="tinyxml2.cpp">
       <Filter>Source Files\Libraries</Filter>
     </ClCompile>
@@ -185,6 +182,15 @@
     </ClCompile>
     <ClCompile Include="ZHierarchy.cpp">
       <Filter>Source Files\Z64</Filter>
+    </ClCompile>
+    <ClCompile Include="ZRoom\Commands\SetLightList.cpp">
+      <Filter>Source Files\Z64\ZRoom\Commands</Filter>
+    </ClCompile>
+    <ClCompile Include="ZRoom\Commands\ZRoomCommandUnk.cpp">
+      <Filter>Source Files\Z64\ZRoom\Commands</Filter>
+    </ClCompile>
+    <ClCompile Include="sqlite\sqlite3.c">
+      <Filter>Source Files\Libraries</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -391,6 +397,18 @@
     </ClInclude>
     <ClInclude Include="ZHierarchy.h">
       <Filter>Header Files\Z64</Filter>
+    </ClInclude>
+    <ClInclude Include="HighLevel\HLFileIntermediette.h">
+      <Filter>Header Files\HighLevel</Filter>
+    </ClInclude>
+    <ClInclude Include="ZRoom\Commands\SetLightList.h">
+      <Filter>Header Files\Z64\ZRoom\Commands</Filter>
+    </ClInclude>
+    <ClInclude Include="ZRoom\Commands\ZRoomCommandUnk.h">
+      <Filter>Header Files\Z64\ZRoom\Commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sqlite_orm.h">
+      <Filter>Header Files\Libraries</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

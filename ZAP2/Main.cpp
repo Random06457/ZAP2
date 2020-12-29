@@ -18,9 +18,6 @@
 #include <string>
 #include "tinyxml2.h"
 
-extern void ModelTest();
-extern void ModelTest2();
-
 using namespace tinyxml2;
 using namespace std;
 
@@ -56,12 +53,7 @@ void ErrorHandler(int sig)
 
 int main(int argc, char* argv[])
 {
-#if !defined(_MSC_VER) && !defined(__CYGWIN__)
-	//signal(SIGSEGV, ErrorHandler);
-#endif
-
 	Globals* g = new Globals();
-
 	return NewMain(argc, argv);
 }
 
@@ -130,6 +122,11 @@ int NewMain(int argc, char* argv[])
 		else if (arg == "-tm") // Test Mode
 		{
 			Globals::Instance->testMode = string(argv[i + 1]) == "1";
+			i++;
+		}
+		else if (arg == "-dm") // Debug Messages
+		{
+			Globals::Instance->debugMessages = string(argv[i + 1]) == "1";
 			i++;
 		}
 		else if (arg == "-profile") // Profile
@@ -203,11 +200,9 @@ int NewMain(int argc, char* argv[])
 	else if (fileMode == ZFileMode::BuildOverlay)
 	{
 		ZOverlay* overlay = ZOverlay::FromBuild(Path::GetDirectoryName(Globals::Instance->inputPath), Path::GetDirectoryName(Globals::Instance->cfgPath));
+		
 		if (overlay)
-		{
-			string source = overlay->GetSourceOutputCode("");
-			File::WriteAllText(Globals::Instance->outputPath, source);
-		}
+			File::WriteAllText(Globals::Instance->outputPath, overlay->GetSourceOutputCode(""));
 	}
 
 	return 0;
@@ -226,18 +221,18 @@ bool Parse(string xmlFilePath, string basePath, string outPath, ZFileMode fileMo
 	if (root == nullptr)
 		return false;
 
-	vector<ZFile*> files = vector<ZFile*>();
+	//vector<ZFile*> files = vector<ZFile*>();
 
 	for (XMLElement* child = root->FirstChildElement(); child != NULL; child = child->NextSiblingElement())
 	{
 		if (string(child->Name()) == "File")
 		{
 			ZFile* file = new ZFile(fileMode, child, basePath, outPath);
-			files.push_back(file);
+			Globals::Instance->files.push_back(file);
 		}
 	}
 
-	for (ZFile* file : files)
+	for (ZFile* file : Globals::Instance->files)
 	{
 		if (fileMode == ZFileMode::Build)
 			file->BuildResources();
@@ -260,8 +255,13 @@ void BuildAssetTexture(string pngFilePath, TextureType texType, string outPath)
 	vector<string> split = StringHelper::Split(outPath, "/");
 	string name = StringHelper::Split(split[split.size() - 1], ".")[0];
 	ZTexture* tex = ZTexture::FromPNG(pngFilePath, texType);
+	string cfgPath = StringHelper::Split(pngFilePath, ".")[0] + ".cfg";
 
-	string src = StringHelper::Sprintf("u64 %s[] = \n{\n", name.c_str()) + tex->GetSourceOutputCode(name) + "};\n";
+	if (File::Exists(cfgPath))
+		name = File::ReadAllText(cfgPath);
+
+	//string src = StringHelper::Sprintf("u64 %s[] = \n{\n", name.c_str()) + tex->GetSourceOutputCode(name) + "};\n";
+	string src = tex->GetSourceOutputCode(name);
 
 	File::WriteAllText(outPath, src);
 	
@@ -274,7 +274,8 @@ void BuildAssetBlob(string blobFilePath, string outPath)
 	ZBlob* blob = ZBlob::FromFile(blobFilePath);
 	string name = StringHelper::Split(split[split.size() - 1], ".")[0];
 
-	string src = StringHelper::Sprintf("u8 %s[] = \n{\n", name.c_str()) + blob->GetSourceOutputCode(name) + "};\n";
+	//string src = StringHelper::Sprintf("u8 %s[] = \n{\n", name.c_str()) + blob->GetSourceOutputCode(name) + "};\n";
+	string src = blob->GetSourceOutputCode(name);
 
 	File::WriteAllText(outPath, src);
 
@@ -288,10 +289,7 @@ void BuildAssetModelIntermediette(string mdlPath, string outPath)
 
 	vector<string> split = StringHelper::Split(outPath, "/");
 	HLModelIntermediette* mdl = HLModelIntermediette::FromXML(doc.RootElement());
-	
-	string output = "";
-
-	output += mdl->OutputCode();
+	string output = mdl->OutputCode();
 	
 	File::WriteAllText(outPath, output);
 

@@ -32,6 +32,8 @@
 #include "Commands/Unused09.h"
 #include "Commands/SetCutscenes.h"
 #include "Commands/EndMarker.h"
+#include "Commands/SetLightList.h"
+#include "Commands/ZRoomCommandUnk.h"
 #include <Path.h>
 
 using namespace std;
@@ -58,6 +60,9 @@ ZRoom* ZRoom::ExtractFromXML(XMLElement* reader, vector<uint8_t> nRawData, int r
 
 	room->scene = nScene;
 
+	Globals::Instance->AddSegment(SEGMENT_ROOM);
+	Globals::Instance->AddSegment(SEGMENT_SCENE);
+
 	//GenDefinitions();
 
 	int cmdCount = 999999;
@@ -77,7 +82,7 @@ ZRoom* ZRoom::ExtractFromXML(XMLElement* reader, vector<uint8_t> nRawData, int r
 			if (child->Attribute("Comment") != NULL)
 				comment = "// " + string(child->Attribute("Comment")) + "\n";
 
-			string addressStr = child->Attribute("Address");
+			string addressStr = child->Attribute("Offset");
 			int address = strtol(StringHelper::Split(addressStr, "0x")[1].c_str(), NULL, 16);
 
 			ZDisplayList* dList = new ZDisplayList(room->rawData, address, ZDisplayList::GetDListLength(room->rawData, address));
@@ -93,7 +98,7 @@ ZRoom* ZRoom::ExtractFromXML(XMLElement* reader, vector<uint8_t> nRawData, int r
 			if (child->Attribute("Comment") != NULL)
 				comment = "// " + string(child->Attribute("Comment")) + "\n";
 
-			string addressStr = child->Attribute("Address");
+			string addressStr = child->Attribute("Offset");
 			int address = strtol(StringHelper::Split(addressStr, "0x")[1].c_str(), NULL, 16);
 
 			string sizeStr = child->Attribute("Size");
@@ -109,7 +114,7 @@ ZRoom* ZRoom::ExtractFromXML(XMLElement* reader, vector<uint8_t> nRawData, int r
 			if (child->Attribute("Comment") != NULL)
 				comment = "// " + string(child->Attribute("Comment")) + "\n";
 
-			string addressStr = child->Attribute("Address");
+			string addressStr = child->Attribute("Offset");
 			int address = strtol(StringHelper::Split(addressStr, "0x")[1].c_str(), NULL, 16);
 
 			ZCutscene* cutscene = new ZCutscene(room->rawData, address, 9999);
@@ -124,7 +129,7 @@ ZRoom* ZRoom::ExtractFromXML(XMLElement* reader, vector<uint8_t> nRawData, int r
 			if (child->Attribute("Comment") != NULL)
 				comment = "// " + string(child->Attribute("Comment")) + "\n";
 
-			string addressStr = child->Attribute("Address");
+			string addressStr = child->Attribute("Offset");
 			int address = strtol(StringHelper::Split(addressStr, "0x")[1].c_str(), NULL, 16);
 
 			int commandsCount = 99999999;
@@ -144,7 +149,7 @@ ZRoom* ZRoom::ExtractFromXML(XMLElement* reader, vector<uint8_t> nRawData, int r
 			if (child->Attribute("Comment") != NULL)
 				comment = "// " + string(child->Attribute("Comment")) + "\n";
 
-			string addressStr = child->Attribute("Address");
+			string addressStr = child->Attribute("Offset");
 			int address = strtol(StringHelper::Split(addressStr, "0x")[1].c_str(), NULL, 16);
 
 			SetPathways* pathway = new SetPathways(room, room->rawData, address);
@@ -161,7 +166,7 @@ ZRoom* ZRoom::ExtractFromXML(XMLElement* reader, vector<uint8_t> nRawData, int r
 			if (child->Attribute("Comment") != NULL)
 				comment = "// " + string(child->Attribute("Comment")) + "\n";
 
-			string addressStr = child->Attribute("Address");
+			string addressStr = child->Attribute("Offset");
 			int address = strtol(StringHelper::Split(addressStr, "0x")[1].c_str(), NULL, 16);
 
 			string typeStr = child->Attribute("Type");
@@ -215,6 +220,7 @@ void ZRoom::ParseCommands(std::vector<ZRoomCommand*>& commandList, CommandSet co
 		case RoomCommand::Unused09: cmd = new Unused09(this, rawData, rawDataIndex); break; // 0x09
 		case RoomCommand::SetMesh: cmd = new SetMesh(this, rawData, rawDataIndex, 0); break; // 0x0A
 		case RoomCommand::SetObjectList: cmd = new SetObjectList(this, rawData, rawDataIndex); break; // 0x0B
+		case RoomCommand::SetLightList: cmd = new SetLightList(this, rawData, rawDataIndex); break; // 0x0C (MM-ONLY)
 		case RoomCommand::SetPathways: cmd = new SetPathways(this, rawData, rawDataIndex); break; // 0x0D
 		case RoomCommand::SetTransitionActorList: cmd = new SetTransitionActorList(this, rawData, rawDataIndex); break; // 0x0E
 		case RoomCommand::SetLightingSettings: cmd = new SetLightingSettings(this, rawData, rawDataIndex); break; // 0x0F
@@ -228,7 +234,7 @@ void ZRoom::ParseCommands(std::vector<ZRoomCommand*>& commandList, CommandSet co
 		case RoomCommand::SetCutscenes: cmd = new SetCutscenes(this, rawData, rawDataIndex); break; // 0x17
 		case RoomCommand::SetAlternateHeaders: cmd = new SetAlternateHeaders(this, rawData, rawDataIndex); break; // 0x18
 		case RoomCommand::SetCameraSettings: cmd = new SetCameraSettings(this, rawData, rawDataIndex); break; // 0x19
-		default: cmd = new ZRoomCommand(this, rawData, rawDataIndex);
+		default: cmd = new ZRoomCommandUnk(this, rawData, rawDataIndex);
 		}
 
 		auto end = chrono::steady_clock::now();
@@ -237,7 +243,7 @@ void ZRoom::ParseCommands(std::vector<ZRoomCommand*>& commandList, CommandSet co
 		if (Globals::Instance->profile)
 		{
 			if (diff > 50)
-				printf("OP: %s, TIME: %ims\n", cmd->GetCommandCName().c_str(), diff);
+				printf("OP: %s, TIME: %lims\n", cmd->GetCommandCName().c_str(), diff);
 		}
 
 		//printf("OP: %s\n", cmd->GetCommandCName().c_str());
@@ -405,14 +411,14 @@ string ZRoom::GetSourceOutputCode(std::string prefix)
 {
 	sourceOutput = "";
 
-	sourceOutput += "#include <z64.h>\n";
+	//sourceOutput += "#include <z64.h>\n";
 	sourceOutput += "#include <segment_symbols.h>\n";
 	sourceOutput += "#include <command_macros_base.h>\n";
 	sourceOutput += "#include <z64cutscene_commands.h>\n";
 	sourceOutput += "#include <variables.h>\n";
 
 	if (scene != nullptr)
-		sourceOutput += StringHelper::Sprintf("#include \"%s.h\"\n", scene->GetName().c_str());
+		sourceOutput += scene->parent->GetHeaderInclude();
 
 	sourceOutput += "\n";
 
@@ -441,8 +447,6 @@ string ZRoom::GetSourceOutputCode(std::string prefix)
 					defines += StringHelper::Sprintf("#define %s_tex_%08X ((u32)%s_tex_%08X + 0x%08X)\n", prefix.c_str(), texturesSorted[i + 1].first, prefix.c_str(),
 						texturesSorted[i].first, texturesSorted[i + 1].first - texturesSorted[i].first);
 
-					//int nSize = textures[texturesSorted[i].first]->GetRawDataSize();
-
 					parent->declarations.erase(texturesSorted[i + 1].first);
 					textures.erase(texturesSorted[i + 1].first);
 					texturesSorted.erase(texturesSorted.begin() + i + 1);
@@ -462,10 +466,12 @@ string ZRoom::GetSourceOutputCode(std::string prefix)
 
 		declaration += item.second->GetSourceOutputCode(prefix);
 
-		//printf("SAVING IMAGE TO %s\n", Globals::Instance->outputPath.c_str());
+		if (Globals::Instance->debugMessages)
+			printf("SAVING IMAGE TO %s\n", Globals::Instance->outputPath.c_str());
+		
 		item.second->Save(Globals::Instance->outputPath);
 
-		parent->AddDeclarationIncludeArray(item.first, StringHelper::Sprintf("../build/%s/%s.%s.c.inc",
+		parent->AddDeclarationIncludeArray(item.first, StringHelper::Sprintf("%s/%s.%s.inc.c",
 			Globals::Instance->outputPath.c_str(), Path::GetFileNameWithoutExtension(item.second->GetName()).c_str(), item.second->GetExternalExtension().c_str()), item.second->GetRawDataSize(),
 			"u64", StringHelper::Sprintf("%s_tex_%08X", prefix.c_str(), item.first), 0);
 	}
@@ -488,6 +494,23 @@ int ZRoom::GetRawDataSize()
 		size += cmd->GetRawDataSize();
 
 	return size;
+}
+
+ZResourceType ZRoom::GetResourceType()
+{
+	return ZResourceType::Room;
+}
+
+void ZRoom::Save(string outFolder)
+{
+	for (ZRoomCommand* cmd : commands)
+		cmd->Save();
+}
+
+void ZRoom::PreGenSourceFiles()
+{
+	for (ZRoomCommand* cmd : commands)
+		cmd->PreGenSourceFiles();
 }
 
 Declaration::Declaration(DeclarationAlignment nAlignment, DeclarationPadding nPadding, uint32_t nSize, string nText)

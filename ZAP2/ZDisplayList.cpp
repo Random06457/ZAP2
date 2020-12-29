@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <File.h>
 #include <Path.h>
+#include <math.h>
 
 using namespace std;
 using namespace tinyxml2;
@@ -39,7 +40,9 @@ ZDisplayList* ZDisplayList::ExtractFromXML(XMLElement* reader, vector<uint8_t> n
 {
 	ZDisplayList* dList = new ZDisplayList();
 
-	dList->name = reader->Attribute("Name");
+	dList->ParseXML(reader);
+
+	//dList->name = reader->Attribute("Name");
 
 	dList->rawData = nRawData;
 	dList->rawDataIndex = nRawDataIndex;
@@ -56,17 +59,12 @@ ZDisplayList* ZDisplayList::BuildFromXML(XMLElement* reader, string inFolder, bo
 	ZDisplayList* dList = new ZDisplayList();
 
 	dList->SetName(reader->Attribute("Name"));
-
-	//if (readFile)
-		//blob->rawData = File::ReadAllBytes(inFolder + "/" + blob->name + ".bin");
-
 	return dList;
 }
 
 ZDisplayList::ZDisplayList(vector<uint8_t> nRawData, int nRawDataIndex, int rawDataSize) : ZDisplayList()
 {
 	fileData = nRawData;
-	//dListAddress = nRawDataIndex;
 	rawDataIndex = nRawDataIndex;
 	name = StringHelper::Sprintf("dlist_%08X", rawDataIndex);
 	rawData = vector<uint8_t>(nRawData.data() + rawDataIndex, nRawData.data() + rawDataIndex + rawDataSize);
@@ -91,7 +89,6 @@ int ZDisplayList::GetDListLength(vector<uint8_t> rawData, int rawDataIndex)
 	while (true)
 	{
 		F3DZEXOpcode opcode = (F3DZEXOpcode)rawData[rawDataIndex + (i * 8)];
-
 		i++;
 
 		if (opcode == F3DZEXOpcode::G_ENDDL)
@@ -157,14 +154,37 @@ int ZDisplayList::OptimizationCheck_LoadTextureBlock(int startIndex, string& out
 
 			fmt = (__ & 0xE0) >> 5;
 			siz = (__ & 0x18) >> 3;
-			texAddr = data & 0x00FFFFFF;
+			texAddr = SEG2FILESPACE(data);
 			int segmentNumber = (data & 0xFF000000) >> 24;
+			
+			if (segmentNumber == 0x80) // Is this texture defined in code?
+				texAddr -= SEG2FILESPACE(parent->baseAddress);
+			
 			lastTexSeg = (data & 0xFF000000);
+
+			if (texAddr == 0xb880e0)
+			{
+				int bp = 0;
+			}
+
+			Declaration* texDecl = nullptr;
+			
+			if (parent != nullptr)
+			{
+				texDecl = parent->GetDeclaration(texAddr);
+
+				if (texDecl == nullptr)
+					texDecl = parent->GetDeclaration(data);
+			}
 
 			if (texAddr != 0)
 			{
-				if (segmentNumber == 2)
+				if (texDecl != nullptr)
+					texStr = StringHelper::Sprintf("%s", texDecl->varName.c_str());
+				else if (segmentNumber == 2)
 					texStr = StringHelper::Sprintf("%s_tex_%08X", scene->GetName().c_str(), texAddr);
+				else if (!Globals::Instance->HasSegment(segmentNumber)) // Probably an external asset we are unable to track
+					texStr = StringHelper::Sprintf("0x%08X", data);
 				else
 					texStr = StringHelper::Sprintf("%s_tex_%08X", prefix.c_str(), texAddr);
 			}
@@ -213,11 +233,6 @@ int ZDisplayList::OptimizationCheck_LoadTextureBlock(int startIndex, string& out
 			int uuu = (data & 0x0000000000FFF000) >> 12;
 			int vvv = (data & 0x0000000000000FFF);
 
-			if (texAddr == 0x8798)
-			{
-				int bp = 0;
-			}
-
 			int shiftAmtW = 2;
 			int shiftAmtH = 2;
 
@@ -230,7 +245,7 @@ int ZDisplayList::OptimizationCheck_LoadTextureBlock(int startIndex, string& out
 			if (sizB == (int)F3DZEXTexSizes::G_IM_SIZ_4b && fmt == (int)F3DZEXTexFormats::G_IM_FMT_IA)
 				shiftAmtH = 3;
 
-			if (texAddr == 0x9018)
+			if (texAddr == 0xb880e0)
 			{
 				int bp = 0;
 			}
@@ -257,6 +272,11 @@ int ZDisplayList::OptimizationCheck_LoadTextureBlock(int startIndex, string& out
 				output += StringHelper::Sprintf("gsDPLoadTextureBlock_4b(%s, %s, %i, %i, %i, %i, %i, %i, %i, %i, %i),",
 				texStr.c_str(), fmtTbl[fmt].c_str(), width2, height2, pal, cms, cmt, masks, maskt, shifts, shiftt);
 		}
+		/*else if (siz == 2 && sizB == 1)
+		{
+			output += StringHelper::Sprintf("gsDPLoadTextureBlock(%s, %s, %s, %i, %i, %i, %i, %i, %i, %i, %i, %i),",
+				texStr.c_str(), fmtTbl[fmt].c_str(), sizTbl[siz].c_str(), width2, height2, pal, cms, cmt, masks, maskt, shifts, shiftt);
+		}*/
 		else
 		{
 			if (siz != sizB)
@@ -267,11 +287,6 @@ int ZDisplayList::OptimizationCheck_LoadTextureBlock(int startIndex, string& out
 				lastTexHeight = height;
 				lastTexSiz = (F3DZEXTexSizes)siz;
 				lastTexLoaded = true;
-
-				if (lastTexAddr == 0x8FD8)
-				{
-					int bp = 0;
-				}
 
 				TextureGenCheck(prefix);
 
@@ -304,19 +319,12 @@ int ZDisplayList::OptimizationCheck_LoadTextureBlock(int startIndex, string& out
 
 string ZDisplayList::GetSourceOutputHeader(string prefix)
 {
-	char line[4096];
-	string sourceOutput = "";
-
-	//sprintf(line, "extern Gfx _%s_dlist_%08X[];\n", prefix.c_str(), dListAddress);
-	sprintf(line, "extern Gfx %s[];\n", name.c_str());
-	sourceOutput += line;
-
 	return "";
 }
 
 string ZDisplayList::GetSourceOutputCode(std::string prefix)
 {
-	char line[4096];
+	char line[4096] = { 0 };
 	string sourceOutput = "";
 
 	for (int i = 0; i < instructions.size(); i++) 
@@ -332,19 +340,23 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 		if (optimizationResult != -1)
 		{
 			i += optimizationResult - 1;
-			sprintf(line, "");
 		}
 		else
 		{
 			switch (opcode)
 			{
 			case F3DZEXOpcode::G_NOOP:
-				sprintf(line, "gsDPNoOpTag(0x%08X),", data & 0xFFFFFFFF);
+				sprintf(line, "gsDPNoOpTag(0x%08lX),", data & 0xFFFFFFFF);
 				break;
 			case F3DZEXOpcode::G_DL:
 			{
 				int pp = (data & 0x00FF000000000000) >> 56;
 				int segNum = (data & 0xFF000000) >> 24;
+
+				Declaration* dListDecl = nullptr;
+				
+				if (parent != nullptr)
+					dListDecl = parent->GetDeclaration(SEG2FILESPACE(data));
 
 				// TEST
 				if (segNum != 8 && scene != nullptr && scene->parent->GetDeclarationName(data & 0x00FFFFFF) != "ERROR_COULD_NOT_FIND_DECLARATION")
@@ -353,18 +365,28 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				}
 
 				if (pp != 0)
-					sprintf(line, "gsSPBranchList(%s_dlist_%08X),", prefix.c_str(), data & 0x00FFFFFF);
+				{
+					if (dListDecl != nullptr)
+						sprintf(line, "gsSPBranchList(%s),", dListDecl->varName.c_str());
+					else
+						sprintf(line, "gsSPBranchList(%s_dlist_%08lX),", prefix.c_str(), SEG2FILESPACE(data));
+				}
 				else
-					sprintf(line, "gsSPDisplayList(%s_dlist_%08X),", prefix.c_str(), data & 0x00FFFFFF);
+				{
+					if (dListDecl != nullptr)
+						sprintf(line, "gsSPDisplayList(%s),", dListDecl->varName.c_str());
+					else
+						sprintf(line, "gsSPDisplayList(%s_dlist_%08lX),", prefix.c_str(), SEG2FILESPACE(data));
+				}
 
 				int segmentNumber = (data & 0xFF000000) >> 24;
 
 				if (segmentNumber == 8 || segmentNumber == 9 || segmentNumber == 10 || segmentNumber == 11 || segmentNumber == 12 || segmentNumber == 13) // Used for runtime-generated display lists
 				{
 					if (pp != 0)
-						sprintf(line, "gsSPBranchList(0x%08X),", data & 0xFFFFFFFF);
+						sprintf(line, "gsSPBranchList(0x%08lX),", data & 0xFFFFFFFF);
 					else
-						sprintf(line, "gsSPDisplayList(0x%08X),", data & 0xFFFFFFFF);
+						sprintf(line, "gsSPDisplayList(0x%08lX),", data & 0xFFFFFFFF);
 				}
 				else
 				{
@@ -372,6 +394,15 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 					nList->scene = scene;
 					otherDLists.push_back(nList);
 				}
+			}
+			break;
+			case F3DZEXOpcode::G_MODIFYVTX:
+			{
+				int ww = (data & 0x00FF000000000000ULL) >> 48;
+				int nnnn = (data & 0x0000FFFF00000000ULL) >> 32;
+				int vvvvvvvv = (data & 0x00000000FFFFFFFFULL);
+
+				sprintf(line, "gsSPModifyVertex(%i, %i, %i),", nnnn / 2, ww, vvvvvvvv);
 			}
 			break;
 			case F3DZEXOpcode::G_CULLDL:
@@ -382,6 +413,15 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				sprintf(line, "gsSPCullDisplayList(%i, %i),", vvvv / 2, wwww / 2);
 			}
 			break;
+			/*case F3DZEXOpcode::G_BRANCH_Z:
+			{
+				int aaa = (data & 0x00FFF00000000000) >> 44;
+				int bbb = (data & 0x00000FFF00000000) >> 32;
+				int zzzzzzzz = (data & 0x00000000FFFFFFFF);
+
+				sprintf(line, "gsSPBranchLessZraw(%i, %i, %i),", );
+			}
+			break;*/
 			case F3DZEXOpcode::G_TRI1:
 			{
 				int aa = ((data & 0x00FF000000000000ULL) >> 48) / 2;
@@ -401,15 +441,31 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				sprintf(line, "gsSP2Triangles(%i, %i, %i, 0, %i, %i, %i, 0),", aa, bb, cc, dd, ee, ff);
 			}
 			break;
+			case F3DZEXOpcode::G_QUAD:
+			{
+				int aa = ((data & 0x00FF000000000000ULL) >> 48) / 2;
+				int bb = ((data & 0x0000FF0000000000ULL) >> 40) / 2;
+				int cc = ((data & 0x000000FF00000000ULL) >> 32) / 2;
+				int dd = ((data & 0x000000000000FFULL)) / 2;
+				sprintf(line, "gsSP1Quadrangle(%i, %i, %i, %i, 0),", aa, bb, cc, dd);
+			}
+			break;
 			case F3DZEXOpcode::G_VTX:
 			{
 				int nn = (data & 0x000FF00000000000ULL) >> 44;
 				int aa = (data & 0x000000FF00000000ULL) >> 32;
-				uint32_t vtxAddr = data & 0x00FFFFFF;
+				uint32_t vtxAddr = SEG2FILESPACE(data);
+
+				if (GETSEGNUM(data) == 0x80) // Are these vertices defined in code?
+					vtxAddr -= SEG2FILESPACE(parent->baseAddress);
+
 				sprintf(line, "gsSPVertex(%s_vertices_%08X, %i, %i),", prefix.c_str(), vtxAddr, nn, ((aa >> 1) - nn));
 
 				{
 					uint32_t currentPtr = data & 0x00FFFFFF;
+
+					if (GETSEGNUM(data) == 0x80) // Are these vertices defined in code?
+						currentPtr -= SEG2FILESPACE(parent->baseAddress);
 
 					vector<Vertex> vtxList = vector<Vertex>();
 
@@ -423,7 +479,7 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 						currentPtr += 16;
 					}
 
-					vertices[data & 0x00FFFFFF] = vtxList;
+					vertices[vtxAddr] = vtxList;
 				}
 
 			}
@@ -438,6 +494,9 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				uint32_t fmt = (__ & 0xE0) >> 5;
 				uint32_t siz = (__ & 0x18) >> 3;
 
+				if (Globals::Instance->debugMessages)
+					printf("TextureGenCheck G_SETTIMG\n");
+				
 				TextureGenCheck(prefix); // HOTSPOT
 
 				lastTexFmt = (F3DZEXTexFormats)fmt;
@@ -445,27 +504,40 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				lastTexSeg = data;
 				lastTexAddr = data & 0x00FFFFFF;
 
+				if (GETSEGNUM(lastTexSeg) == 0x80) // Is this texture defined in code?
+					lastTexAddr -= SEG2FILESPACE(parent->baseAddress);
+
 				int segmentNumber = (data >> 24) & 0xFF;
 
 				if (segmentNumber != 2)
 				{
 					char texStr[2048];
 
-					int32_t texAddress = data & 0x00FFFFFF;
+					int32_t texAddress = SEG2FILESPACE(data);
 
-					if (texAddress != 0)
+					Declaration* texDecl = nullptr;
+					
+					if (parent != nullptr)
+					{
+						if (Globals::Instance->HasSegment(segmentNumber))
+							texDecl = parent->GetDeclaration(texAddress);
+						else
+							texDecl = parent->GetDeclaration(data);
+					}
+
+					if (texDecl != nullptr)
+						sprintf(texStr, "%s", texDecl->varName.c_str());
+					else if (data != 0 && Globals::Instance->HasSegment(segmentNumber))
 						sprintf(texStr, "%s_tex_%08X", prefix.c_str(), texAddress);
-					else if (segmentNumber != 3)
-						sprintf(texStr, "0x%08X", data);
 					else
-						sprintf(texStr, "0");
+						sprintf(texStr, "0x%08lX", data);
 
 					sprintf(line, "gsDPSetTextureImage(%s, %s, %i, %s),", fmtTbl[fmt].c_str(), sizTbl[siz].c_str(), www + 1, texStr);
 				}
 				else
 				{
 					//sprintf(line, "gsDPSetTextureImage(%s, %s, %i, 0x%08X),", fmtTbl[fmt].c_str(), sizTbl[siz].c_str(), www + 1, data & 0xFFFFFFFF);
-					sprintf(line, "gsDPSetTextureImage(%s, %s, %i, %s_tex_%08X),", fmtTbl[fmt].c_str(), sizTbl[siz].c_str(), www + 1, scene->GetName().c_str(), data & 0x00FFFFFF);
+					sprintf(line, "gsDPSetTextureImage(%s, %s, %i, %s_tex_%08lX),", fmtTbl[fmt].c_str(), sizTbl[siz].c_str(), www + 1, scene->GetName().c_str(), data & 0x00FFFFFF);
 				}
 			}
 			break;
@@ -509,7 +581,6 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 
 				if (geoModeParam & 0x00800000)
 					geoModeStr += " | G_CLIPPING";
-
 				
 				if (ssssssss != 0)
 				{
@@ -761,8 +832,8 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 			break;
 			case F3DZEXOpcode::G_SETTILESIZE:
 			{
-				int sss = (data & 0x00FFF00000000000) >> 48;
-				int ttt = (data & 0x00000FFF00000000) >> 36;
+				int sss = (data & 0x00FFF00000000000) >> 44;
+				int ttt = (data & 0x00000FFF00000000) >> 32;
 				int uuu = (data & 0x0000000000FFF000) >> 12;
 				int vvv = (data & 0x0000000000000FFF);
 				int i = (data & 0x000000000F000000) >> 24;
@@ -780,11 +851,17 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				if (lastTexSizTest == F3DZEXTexSizes::G_IM_SIZ_4b && lastTexFmt == F3DZEXTexFormats::G_IM_FMT_IA)
 					shiftAmtH = 3;
 
+
 				lastTexWidth = (uuu >> shiftAmtW) + 1;
 				lastTexHeight = (vvv >> shiftAmtH) + 1;
-				//printf("lastTexWidth: %i lastTexHeight: %i\n", lastTexWidth, lastTexHeight);
+				
+				if (Globals::Instance->debugMessages)
+					printf("lastTexWidth: %i lastTexHeight: %i, lastTexSizTest: 0x%x, lastTexFmt: 0x%x\n", lastTexWidth, lastTexHeight, static_cast<uint32_t>(lastTexSizTest), static_cast<uint32_t>(lastTexFmt));
 
-				//TextureGenCheck(prefix);
+				if (Globals::Instance->debugMessages)
+					printf("TextureGenCheck G_SETTILESIZE\n");
+				
+				TextureGenCheck(prefix);
 
 				sprintf(line, "gsDPSetTileSize(%i, %i, %i, %i, %i),", i, sss, ttt, uuu, vvv);
 			}
@@ -793,7 +870,7 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 			{
 				int sss = (data & 0x00FFF00000000000) >> 48;
 				int ttt = (data & 0x00000FFF00000000) >> 36;
-				int i = (data & 0x000000000F000000) >> 24;
+				int i	= (data & 0x000000000F000000) >> 24;
 				int xxx = (data & 0x0000000000FFF000) >> 12;
 				int ddd = (data & 0x0000000000000FFF);
 
@@ -811,11 +888,24 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				int ____ = (data & 0x0000FFFF00000000) >> 32;
 				int ssss = (data & 0x00000000FFFF0000) >> 16;
 				int tttt = (data & 0x000000000000FFFF);
-				int lll = (____ & 0x3800) >> 7;
-				int ddd = (____ & 0x700) >> 4;
+				int lll = (____ & 0x3800) >> 11;
+				int ddd = (____ & 0x700) >> 8;
 				int nnnnnnn = (____ & 0xFE) >> 1;
 
 				sprintf(line, "gsSPTexture(%i, %i, %i, %i, %s),", ssss, tttt, lll, ddd, nnnnnnn == 1 ? "G_ON" : "G_OFF");
+			}
+			break;
+			case F3DZEXOpcode::G_RDPSETOTHERMODE:
+			{
+				int hhhhhh = (data & 0x00FFFFFF00000000) >> 32;
+				int llllllll = (data & 0x00000000FFFFFFFF);
+
+				sprintf(line, "gsDPSetOtherMode(%i, %i),", hhhhhh, llllllll);
+			}
+			break;
+			case F3DZEXOpcode::G_POPMTX:
+			{
+				sprintf(line, "gsSPPopMatrix(%li),", data);
 			}
 			break;
 			case F3DZEXOpcode::G_LOADTLUT:
@@ -823,19 +913,14 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 				int t = (data & 0x0000000007000000) >> 24;
 				int ccc = (data & 0x00000000003FF000) >> 14;
 
-				if (lastCISiz == F3DZEXTexSizes::G_IM_SIZ_8b)
-				{
-					lastTexWidth = 16;
-					lastTexHeight = 16;
-				}
-				else
-				{
-					lastTexWidth = 4;
-					lastTexHeight = 4;
-				}
+				lastTexWidth = sqrt(ccc + 1);
+				lastTexHeight = sqrt(ccc + 1);
 
 				lastTexLoaded = true;
 
+				if (Globals::Instance->debugMessages)
+					printf("TextureGenCheck G_LOADTLUT (lastCISiz: %i)\n", static_cast<uint32_t>(lastCISiz));
+				
 				TextureGenCheck(prefix);
 
 				sprintf(line, "gsDPLoadTLUTCmd(%i, %i),", t, ccc);
@@ -899,6 +984,9 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 			case F3DZEXOpcode::G_ENDDL:
 				sprintf(line, "gsSPEndDisplayList(),");
 
+				if (Globals::Instance->debugMessages)
+					printf("TextureGenCheck G_ENDDL\n");
+				
 				TextureGenCheck(prefix);
 				break;
 			case F3DZEXOpcode::G_RDPHALF_1:
@@ -947,7 +1035,7 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 			}
 			break;
 			default:
-				sprintf(line, "// Opcode 0x%02X unimplemented!", opcode);
+				sprintf(line, "// Opcode 0x%02X unimplemented!", static_cast<uint32_t>(opcode));
 				break;
 			}
 		}
@@ -1004,6 +1092,9 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 			}
 		}
 
+		if (scene == nullptr) // TODO: Bit of a hack but it works for now...
+			parent->defines += defines;
+
 		// Generate Vertex Declarations
 		for (pair<int32_t, vector<Vertex>> item : vertices)
 		{
@@ -1050,13 +1141,9 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 						defines += StringHelper::Sprintf("#define %s_tex_%08X ((u32)%s_tex_%08X + 0x%08X)\n", scene->GetName().c_str(), texturesSorted[i + 1].first, scene->GetName().c_str(),
 							texturesSorted[i].first, texturesSorted[i + 1].first - texturesSorted[i].first);
 
-						//int nSize = textures[texturesSorted[i].first]->GetRawDataSize();
-
 						scene->parent->declarations.erase(texturesSorted[i + 1].first);
 						scene->textures.erase(texturesSorted[i + 1].first);
 						texturesSorted.erase(texturesSorted.begin() + i + 1);
-
-						//textures.erase(texturesSorted[i + 1].first);
 
 						i--;
 					}
@@ -1107,16 +1194,18 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 
 			if (parent != nullptr)
 			{
-				//parent->declarations[item.first] = new Declaration(DeclarationAlignment::None, item.second->GetRawDataSize(), "u64", 
-					//StringHelper::Sprintf("%s_tex_%08X", prefix.c_str(), item.first), true, declaration);
+				if (parent->GetDeclaration(item.first) == nullptr)
+				{
+					if (Globals::Instance->debugMessages)
+						printf("SAVING IMAGE TO %s\n", Globals::Instance->outputPath.c_str());
 
-				//printf("SAVING IMAGE TO %s\n", Globals::Instance->outputPath.c_str());
-				item.second->Save(Globals::Instance->outputPath);
+					item.second->Save(Globals::Instance->outputPath);
 
-				parent->AddDeclarationIncludeArray(item.first, StringHelper::Sprintf("../build/%s/%s.%s.c.inc",
-					Globals::Instance->outputPath.c_str(), Path::GetFileNameWithoutExtension(item.second->GetName()).c_str(), 
-					item.second->GetExternalExtension().c_str()), item.second->GetRawDataSize(),
-					"u64", StringHelper::Sprintf("%s_tex_%08X", prefix.c_str(), item.first), 0);
+					parent->AddDeclarationIncludeArray(item.first, StringHelper::Sprintf("%s/%s.%s.inc.c",
+						Globals::Instance->outputPath.c_str(), Path::GetFileNameWithoutExtension(item.second->GetName()).c_str(),
+						item.second->GetExternalExtension().c_str()), item.second->GetRawDataSize(),
+						"u64", StringHelper::Sprintf("%s_tex_%08X", prefix.c_str(), item.first), 0);
+				}
 			}
 		}
 
@@ -1134,34 +1223,28 @@ string ZDisplayList::GetSourceOutputCode(std::string prefix)
 // HOTSPOT
 void ZDisplayList::TextureGenCheck(string prefix)
 {
-	if (TextureGenCheck(fileData, textures, scene, prefix, lastTexWidth, lastTexHeight, lastTexAddr, lastTexSeg, lastTexFmt, lastTexSiz, lastTexLoaded))
+	if (TextureGenCheck(fileData, textures, scene, parent, prefix, lastTexWidth, lastTexHeight, lastTexAddr, lastTexSeg, lastTexFmt, lastTexSiz, lastTexLoaded))
 	{
-		//lastTexWidth = 0;
-		//lastTexHeight = 0;
 		lastTexAddr = 0;
 		lastTexLoaded = false;
 	}
 }
 
 // HOTSPOT
-bool ZDisplayList::TextureGenCheck(vector<uint8_t> fileData, map<uint32_t, ZTexture*>& textures, ZRoom* scene, string prefix, uint32_t texWidth, uint32_t texHeight, uint32_t texAddr, uint32_t texSeg, F3DZEXTexFormats texFmt, F3DZEXTexSizes texSiz, bool texLoaded)
+bool ZDisplayList::TextureGenCheck(vector<uint8_t> fileData, map<uint32_t, ZTexture*>& textures, ZRoom* scene, ZFile* parent, string prefix, uint32_t texWidth, uint32_t texHeight, uint32_t texAddr, uint32_t texSeg, F3DZEXTexFormats texFmt, F3DZEXTexSizes texSiz, bool texLoaded)
 {
 	int segmentNumber = (texSeg & 0xFF000000) >> 24;
 
-	//printf("TextureGenCheck seg=%i width=%i height=%i addr=0x%08X\n", segmentNumber, texWidth, texHeight, texAddr);
+	if (Globals::Instance->debugMessages)
+		printf("TextureGenCheck seg=%i width=%i height=%i addr=0x%08X\n", segmentNumber, texWidth, texHeight, texAddr);
 
-	if (texAddr != 0 && texWidth != 0 && texHeight != 0 && texLoaded)
+	if (texAddr != 0 && texWidth != 0 && texHeight != 0 && texLoaded && Globals::Instance->HasSegment(segmentNumber))
 	{
 		if (segmentNumber != 2) // Not from a scene file
 		{
 			ZTexture* tex = ZTexture::FromBinary(TexFormatToTexType(texFmt, texSiz), fileData, texAddr, StringHelper::Sprintf("%s_tex_%08X", prefix.c_str(), texAddr), texWidth, texHeight);
 
-			if (texAddr == 0x8FD8)
-			{
-				int bp = 0;
-			}
-
-			tex->Save(Globals::Instance->outputPath);
+			//tex->Save(Globals::Instance->outputPath);
 			textures[texAddr] = tex;
 
 			return true;
@@ -1171,18 +1254,12 @@ bool ZDisplayList::TextureGenCheck(vector<uint8_t> fileData, map<uint32_t, ZText
 			ZTexture* tex = ZTexture::FromBinary(TexFormatToTexType(texFmt, texSiz), scene->GetRawData(), texAddr,
 				StringHelper::Sprintf("%s_tex_%08X", Globals::Instance->lastScene->GetName().c_str(), texAddr), texWidth, texHeight);
 
-			tex->Save(Globals::Instance->outputPath);
-
-			if (texAddr == 0x8FD8)
-			{
-				int bp = 0;
-			}
+			//tex->Save(Globals::Instance->outputPath);
 
 			if (scene != nullptr)
 			{
 				scene->textures[texAddr] = tex;
-				//scene->parent->AddDeclarationArray(texAddr, DeclarationAlignment::None, tex->GetRawDataSize(), "u64", tex->GetName(), 0, tex->GetSourceOutputCode(scene->GetName()));
-				scene->parent->AddDeclarationIncludeArray(texAddr, StringHelper::Sprintf("../build/%s/%s.%s.c.inc", 
+				scene->parent->AddDeclarationIncludeArray(texAddr, StringHelper::Sprintf("%s/%s.%s.inc.c", 
 					Globals::Instance->outputPath.c_str(), Path::GetFileNameWithoutExtension(tex->GetName()).c_str(), tex->GetExternalExtension().c_str()), tex->GetRawDataSize(),
 					"u64", StringHelper::Sprintf("%s_tex_%08X", Globals::Instance->lastScene->GetName().c_str(), texAddr), 0);
 			}
@@ -1231,19 +1308,26 @@ TextureType ZDisplayList::TexFormatToTexType(F3DZEXTexFormats fmt, F3DZEXTexSize
 
 void ZDisplayList::Save(string outFolder)
 {
-	HLModelIntermediette* mdl = HLModelIntermediette::FromZDisplayList(this);
+	//HLModelIntermediette* mdl = HLModelIntermediette::FromZDisplayList(this);
 
 	// For testing purposes only at the moment...
-	if (Globals::Instance->testMode)
-	{
-		string xml = mdl->OutputXML();
-		string obj = mdl->ToOBJFile();
-		string fbx = mdl->ToFBXFile();
+	//if (Globals::Instance->testMode)
+	//{
+		//string xml = mdl->OutputXML();
+		//string obj = mdl->ToOBJFile();
+		//string fbx = mdl->ToFBXFile();
 
-		File::WriteAllText(outFolder + "/" + name + ".mdli", xml);
-		File::WriteAllText(outFolder + "/" + name + ".obj", obj);
-		File::WriteAllText(outFolder + "/" + name + ".fbx", fbx);
-	}
+		//File::WriteAllText(outFolder + "/" + name + ".mdli", xml);
+		//File::WriteAllText(outFolder + "/" + name + ".obj", obj);
+		//File::WriteAllText(outFolder + "/" + name + ".fbx", fbx);
+	//}
+}
+
+void ZDisplayList::GenerateHLIntermediette(HLFileIntermediette& hlFile)
+{
+	HLModelIntermediette* mdl = (HLModelIntermediette*)&hlFile;
+	HLModelIntermediette::FromZDisplayList(mdl, this);
+	mdl->blocks.push_back(new HLTerminator());
 }
 
 vector<uint8_t> ZDisplayList::GetRawData()

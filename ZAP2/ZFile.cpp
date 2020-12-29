@@ -9,7 +9,10 @@
 #include "File.h"
 #include "Directory.h"
 #include "Globals.h"
+#include "HighLevel/HLModelIntermediette.h"
+#include "sqlite_orm.h"
 #include <algorithm>
+#include <cassert>
 
 using namespace tinyxml2;
 using namespace std;
@@ -21,6 +24,9 @@ ZFile::ZFile()
 	outputPath = Directory::GetCurrentDirectory();
 	declarations = map<int32_t, Declaration*>();
 	defines = "";
+	baseAddress = 0;
+	rangeStart = 0x000000000;
+	rangeEnd = 0xFFFFFFFF;
 }
 
 ZFile::ZFile(string nOutPath, string nName) : ZFile()
@@ -47,20 +53,44 @@ ZFile::ZFile(ZFileMode mode, XMLElement* reader, string nBasePath, string nOutPa
 void ZFile::ParseXML(ZFileMode mode, XMLElement* reader)
 {
 	name = reader->Attribute("Name");
+	int segment = -1;
+
+	if (reader->Attribute("BaseAddress") != NULL)
+		baseAddress = (uint32_t)strtoul(StringHelper::Split(reader->Attribute("BaseAddress"), "0x")[1].c_str(), NULL, 16);
+
+	if (reader->Attribute("RangeStart") != NULL)
+		rangeStart = (uint32_t)strtoul(StringHelper::Split(reader->Attribute("RangeStart"), "0x")[1].c_str(), NULL, 16);
+
+	if (reader->Attribute("RangeEnd") != NULL)
+		rangeEnd = (uint32_t)strtoul(StringHelper::Split(reader->Attribute("RangeEnd"), "0x")[1].c_str(), NULL, 16);
+
+	if (reader->Attribute("Segment") != NULL)
+		segment = strtol(reader->Attribute("Segment"), NULL, 10);
+
+	if (segment != -1)
+	{
+		//printf("Adding Segment %i\n", segment);
+		Globals::Instance->AddSegment(segment);
+	}
 
 	string folderName = basePath + "/" + Path::GetFileNameWithoutExtension(name);
 	
 	if (mode == ZFileMode::Extract)
+	{
+		if (!File::Exists(basePath + "/" + name))
+			throw StringHelper::Sprintf("Error! File %s does not exist.", (basePath + "/" + name).c_str());
+
 		rawData = File::ReadAllBytes(basePath + "/" + name);
+	}
 
 	int rawDataIndex = 0;
 
 	for (XMLElement* child = reader->FirstChildElement(); child != NULL; child = child->NextSiblingElement())
 	{
-		printf("%s: %08X\n", child->Attribute("Name"), rawDataIndex);
+		if (child->Attribute("Offset") != NULL)
+			rawDataIndex = strtol(StringHelper::Split(child->Attribute("Offset"), "0x")[1].c_str(), NULL, 16);
 
-		if (child->Attribute("Address") != NULL)
-			rawDataIndex = strtol(StringHelper::Split(child->Attribute("Address"), "0x")[1].c_str(), NULL, 16);
+		printf("%s: %08X\n", child->Attribute("Name"), rawDataIndex);
 
 		if (string(child->Name()) == "Texture")
 		{
@@ -118,7 +148,20 @@ void ZFile::ParseXML(ZFileMode mode, XMLElement* reader)
 				room = ZRoom::ExtractFromXML(child, rawData, rawDataIndex, folderName, this, Globals::Instance->lastScene);
 
 			if (string(child->Name()) == "Scene")
+			{
 				Globals::Instance->lastScene = room;
+
+				if (segment == -1)
+					segment = SEGMENT_SCENE;
+			}
+			else
+			{
+				if (segment == -1)
+					segment = SEGMENT_ROOM;
+			}
+
+			if (segment != -1)
+				Globals::Instance->AddSegment(segment);
 
 			resources.push_back(room);
 
@@ -156,6 +199,20 @@ void ZFile::ParseXML(ZFileMode mode, XMLElement* reader)
 			resources.push_back(limb);
 
 			rawDataIndex += limb->GetRawDataSize();
+		}
+		else if (string(child->Name()) == "Symbol")
+		{
+			ZResource* res = nullptr;
+
+			if (mode == ZFileMode::Extract)
+			{
+				res = new ZResource();
+				res->SetName(child->Attribute("Name"));
+				res->SetRawDataIndex(rawDataIndex);
+				res->outputDeclaration = false;
+			}
+
+			resources.push_back(res);
 		}
 	}
 }
@@ -218,14 +275,21 @@ void ZFile::ExtractResources(string outputDir)
 	if (!Directory::Exists(outputPath))
 		Directory::CreateDirectory(outputPath);
 
+	for (ZResource* res : resources)
+		res->PreGenSourceFiles();
+
 	if (Globals::Instance->genSourceFile)
 		GenerateSourceFiles(outputDir);
 
 	for (ZResource* res : resources)
 	{
 		printf("Saving resource %s\n", res->GetName().c_str());
+		res->CalcHash(); // TEST
 		res->Save(outputPath);
 	}
+
+	if (Globals::Instance->testMode)
+		GenerateHLIntermediette();
 }
 
 void ZFile::AddResource(ZResource* res)
@@ -235,6 +299,15 @@ void ZFile::AddResource(ZResource* res)
 
 Declaration* ZFile::AddDeclaration(uint32_t address, DeclarationAlignment alignment, uint32_t size, std::string varType, std::string varName, std::string body)
 {
+#if _DEBUG
+	if (declarations.find(address) != declarations.end())
+	{
+		int bp = 0;
+	}
+#endif
+
+	AddDeclarationDebugChecks(address);
+
 	Declaration* decl = new Declaration(alignment, size, varType, varName, false, body);
 	declarations[address] = decl;
 	return decl;
@@ -242,33 +315,83 @@ Declaration* ZFile::AddDeclaration(uint32_t address, DeclarationAlignment alignm
 
 void ZFile::AddDeclaration(uint32_t address, DeclarationAlignment alignment, DeclarationPadding padding, uint32_t size, string varType, string varName, std::string body)
 {
+#if _DEBUG
+	if (declarations.find(address) != declarations.end())
+	{
+		int bp = 0;
+	}
+#endif
+
+	AddDeclarationDebugChecks(address);
+
 	declarations[address] = new Declaration(alignment, padding, size, varType, varName, false, body);
 }
 
 void ZFile::AddDeclarationArray(uint32_t address, DeclarationAlignment alignment, uint32_t size, std::string varType, std::string varName, int arrayItemCnt, std::string body)
 {
+#if _DEBUG
+	if (declarations.find(address) != declarations.end())
+	{
+		int bp = 0;
+	}
+#endif
+
+	AddDeclarationDebugChecks(address);
+
 	declarations[address] = new Declaration(alignment, size, varType, varName, true, arrayItemCnt, body);
 }
 
 
 void ZFile::AddDeclarationArray(uint32_t address, DeclarationAlignment alignment, DeclarationPadding padding, uint32_t size, string varType, string varName, int arrayItemCnt, std::string body)
 {
+#if _DEBUG
+	if (declarations.find(address) != declarations.end())
+	{
+		int bp = 0;
+	}
+#endif
+
+	AddDeclarationDebugChecks(address);
+
 	declarations[address] = new Declaration(alignment, padding, size, varType, varName, true, arrayItemCnt, body);
 }
 
 
 void ZFile::AddDeclarationPlaceholder(uint32_t address)
 {
-	declarations[address] = new Declaration(DeclarationAlignment::None, 0, "", "", false, "");
+	AddDeclarationDebugChecks(address);
+
+	if (declarations.find(address) == declarations.end())
+		declarations[address] = new Declaration(DeclarationAlignment::None, 0, "", "", false, "");
+}
+
+void ZFile::AddDeclarationPlaceholder(uint32_t address, string varName)
+{
+	AddDeclarationDebugChecks(address);
+
+	if (declarations.find(address) == declarations.end())
+		declarations[address] = new Declaration(DeclarationAlignment::None, 0, "", varName, false, "");
 }
 
 void ZFile::AddDeclarationInclude(uint32_t address, string includePath, uint32_t size, string varType, string varName)
 {
-	declarations[address] = new Declaration(includePath, size, varType, varName);
+	AddDeclarationDebugChecks(address);
+
+	if (declarations.find(address) == declarations.end())
+		declarations[address] = new Declaration(includePath, size, varType, varName);
 }
 
 void ZFile::AddDeclarationIncludeArray(uint32_t address, std::string includePath, uint32_t size, std::string varType, std::string varName, int arrayItemCnt)
 {
+#if _DEBUG
+	if (declarations.find(address) != declarations.end())
+	{
+		int bp = 0;
+	}
+#endif
+
+	AddDeclarationDebugChecks(address);
+
 	Declaration* decl = new Declaration(includePath, size, varType, varName);
 
 	decl->isArray = true;
@@ -277,18 +400,46 @@ void ZFile::AddDeclarationIncludeArray(uint32_t address, std::string includePath
 	declarations[address] = decl;
 }
 
+void ZFile::AddDeclarationDebugChecks(uint32_t address)
+{
+#ifdef _DEBUG
+	if (address == 0xB888E0)
+	{
+		int bp = 0;
+	}
+#endif
+}
+
 std::string ZFile::GetDeclarationName(uint32_t address)
+{
+	return GetDeclarationName(address, "ERROR_COULD_NOT_FIND_DECLARATION"); // Note: For now that default message is just for testing
+}
+
+std::string ZFile::GetDeclarationName(uint32_t address, std::string defaultResult)
 {
 	if (declarations.find(address) != declarations.end())
 		return declarations[address]->varName;
 
-	return "ERROR_COULD_NOT_FIND_DECLARATION";
+	return defaultResult;
 }
 
 Declaration* ZFile::GetDeclaration(uint32_t address)
 {
 	if (declarations.find(address) != declarations.end())
 		return declarations[address];
+
+	return nullptr;
+}
+
+Declaration* ZFile::GetDeclarationRanged(uint32_t address)
+{
+	for (const auto decl : declarations)
+	{
+		if (address >= decl.first && address <= decl.first + decl.second->size)
+		{
+			return decl.second;
+		}
+	}
 
 	return nullptr;
 }
@@ -304,7 +455,14 @@ void ZFile::GenerateSourceFiles(string outputDir)
 
 	sourceOutput += "#include <ultra64.h>\n";
 	sourceOutput += "#include <z64.h>\n";
-	sourceOutput += StringHelper::Sprintf("#include \"%s\"\n\n", (Path::GetFileNameWithoutExtension(name) + ".h").c_str());
+	sourceOutput += GetHeaderInclude();
+
+	// Generate placeholder declarations
+	for (ZResource* res : resources)
+	{
+		if (GetDeclaration(res->GetRawDataIndex()) == nullptr)
+			AddDeclarationPlaceholder(res->GetRawDataIndex(), res->GetName());
+	}
 
 	// Generate Code
 	for (ZResource* res : resources)
@@ -319,10 +477,15 @@ void ZFile::GenerateSourceFiles(string outputDir)
 			while (StringHelper::EndsWith(outputDir, "/"))
 				outputDir = outputDir.substr(0, outputDir.length() - 1);
 
-			//sourceOutput += StringHelper::Sprintf("#include <../build/%s/%s.%s.c.inc>", outputDir.c_str(), Path::GetFileNameWithoutExtension(res->GetName()).c_str(), res->GetExternalExtension().c_str());
-			AddDeclarationIncludeArray(res->GetRawDataIndex(), StringHelper::Sprintf("../build/%s/%s.%s.c.inc",
-				outputDir.c_str(), Path::GetFileNameWithoutExtension(res->GetName()).c_str(), res->GetExternalExtension().c_str()), res->GetRawDataSize(),
-				"", "", 0);
+			// HACK
+			string declType = "u64";
+
+			if (res->GetResourceType() != ZResourceType::Texture)
+				declType = "u8";
+
+			AddDeclarationIncludeArray(res->GetRawDataIndex(), StringHelper::Sprintf("%s/%s.%s.inc.c",
+				outputDir.c_str(), Path::GetFileNameWithoutExtension(res->GetOutName()).c_str(), res->GetExternalExtension().c_str()), res->GetRawDataSize(),
+				declType, res->GetName(), 0);
 			
 			
 			//File::WriteAllText("build/" + outputDir + "/" + Path::GetFileNameWithoutExtension(res->GetName()) + ".inc.c", resSrc);
@@ -333,7 +496,7 @@ void ZFile::GenerateSourceFiles(string outputDir)
 			sourceOutput += resSrc;
 		}
 
-		if (resSrc != "")
+		if (resSrc != "" && !res->IsExternalResource())
 			sourceOutput += "\n";
 	}
 
@@ -342,7 +505,7 @@ void ZFile::GenerateSourceFiles(string outputDir)
 	while (StringHelper::EndsWith(outputDir, "/"))
 		outputDir = outputDir.substr(0, outputDir.length() - 1);
 
-	string buildPath = outputDir + "/" + "basefile.txt";
+	string buildPath = "build/" + outputDir + "/" + "basefile.txt";
 	string outPath = outputDir + "/" + Path::GetFileNameWithoutExtension(name) + ".c";
 	//printf("WRITING %s\n", buildPath.c_str());
 
@@ -353,7 +516,7 @@ void ZFile::GenerateSourceFiles(string outputDir)
 		//Directory::CreateDirectory(Path::GetPath(buildPath));
 
 	File::WriteAllText(outPath, sourceOutput);
-	//File::WriteAllText(buildPath, outPath);
+	File::WriteAllText(buildPath, outPath);
 
 	// Generate Header
 	sourceOutput = "";
@@ -372,6 +535,26 @@ void ZFile::GenerateSourceFiles(string outputDir)
 	File::WriteAllText(outputDir + "/" + Path::GetFileNameWithoutExtension(name) + ".h", sourceOutput);
 }
 
+void ZFile::GenerateHLIntermediette()
+{
+	// This is kinda hacky but it gets the job done for now...
+	HLModelIntermediette* mdl = new HLModelIntermediette();
+
+	for (ZResource* res : resources)
+	{
+		if (typeid(ZDisplayList) == typeid(*res) || typeid(ZHierarchy) == typeid(*res))
+			res->GenerateHLIntermediette(*mdl);
+	}
+
+	std::string test = mdl->ToOBJFile();
+	std::string test2 = mdl->ToFBXFile();
+}
+
+std::string ZFile::GetHeaderInclude()
+{
+	return StringHelper::Sprintf("#include \"%s\"\n\n", (Path::GetFileNameWithoutExtension(name) + ".h").c_str());
+}
+
 string ZFile::ProcessDeclarations()
 {
 	string output = "";
@@ -387,6 +570,8 @@ string ZFile::ProcessDeclarations()
 
 	// Account for padding/alignment
 	int lastAddr = 0;
+
+	//printf("RANGE START: 0x%08X - RANGE END: 0x%08X\n", rangeStart, rangeEnd);
 
 	for (pair<int32_t, Declaration*> item : declarationKeysSorted)
 	{
@@ -469,11 +654,11 @@ string ZFile::ProcessDeclarations()
 		lastAddr = item.first;
 	}
 
-	// Handle for unaccounted data
+	// Handle unaccounted data
 	lastAddr = 0;
 	for (pair<int32_t, Declaration*> item : declarationKeysSorted)
 	{
-		if (lastAddr != 0)
+		if (lastAddr != 0 && item.first >= rangeStart && item.first < rangeEnd)
 		{
 			if (lastAddr + declarations[lastAddr]->size > item.first)
 			{
@@ -499,8 +684,11 @@ string ZFile::ProcessDeclarations()
 
 				if (declarations.find(lastAddr + declarations[lastAddr]->size) == declarations.end())
 				{
-					AddDeclarationArray(lastAddr + declarations[lastAddr]->size, DeclarationAlignment::None, diff, "static u8", StringHelper::Sprintf("unaccounted%04X", lastAddr + declarations[lastAddr]->size),
-						diff, src);
+					if (diff > 0)
+					{
+						AddDeclarationArray(lastAddr + declarations[lastAddr]->size, DeclarationAlignment::None, diff, "static u8", StringHelper::Sprintf("unaccounted%04X", lastAddr + declarations[lastAddr]->size),
+							diff, src);
+					}
 				}
 			}
 		}
@@ -509,7 +697,7 @@ string ZFile::ProcessDeclarations()
 	}
 
 	// TODO: THIS CONTAINS REDUNDANCIES. CLEAN THIS UP!
-	if (lastAddr + declarations[lastAddr]->size < rawData.size())
+	if (lastAddr + declarations[lastAddr]->size < rawData.size() && lastAddr + declarations[lastAddr]->size >= rangeStart && lastAddr + declarations[lastAddr]->size < rangeEnd)
 	{
 		int diff = (int)(rawData.size() - (lastAddr + declarations[lastAddr]->size));
 
@@ -525,8 +713,11 @@ string ZFile::ProcessDeclarations()
 
 		if (declarations.find(lastAddr + declarations[lastAddr]->size) == declarations.end())
 		{
-			AddDeclarationArray(lastAddr + declarations[lastAddr]->size, DeclarationAlignment::None, diff, "static u8", StringHelper::Sprintf("unaccounted%04X", lastAddr + declarations[lastAddr]->size),
-				diff, src);
+			if (diff > 0)
+			{
+				AddDeclarationArray(lastAddr + declarations[lastAddr]->size, DeclarationAlignment::None, diff, "static u8", StringHelper::Sprintf("unaccounted%04X", lastAddr + declarations[lastAddr]->size),
+					diff, src);
+			}
 		}
 	}
 
@@ -541,9 +732,10 @@ string ZFile::ProcessDeclarations()
 	{
 		if (item.second->includePath != "")
 		{
-			output += StringHelper::Sprintf("#include <%s>\n", item.second->includePath.c_str());
+			//output += StringHelper::Sprintf("#include \"%s\"\n", item.second->includePath.c_str());
+			output += StringHelper::Sprintf("%s %s[] = {\n#include \"%s\"\n};\n", item.second->varType.c_str(), item.second->varName.c_str(), item.second->includePath.c_str());
 		}
-		else
+		else if (item.second->varType != "")
 		{
 			if (item.second->preText != "")
 				output += item.second->preText + "\n";

@@ -331,3 +331,13 @@ ASALocalRun/
 
 *.out
 *.o
+<<<<<<< HEAD
+<<<<<<< HEAD
+*.d
+=======
+.vscode/
+>>>>>>> Added Makefile machinery for ccache support (#9)
+=======
+*.d
+.vscode/
+>>>>>>> Updated gitignore and makefile

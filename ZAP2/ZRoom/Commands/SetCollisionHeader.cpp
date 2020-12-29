@@ -8,12 +8,10 @@ using namespace std;
 
 SetCollisionHeader::SetCollisionHeader(ZRoom* nZRoom, std::vector<uint8_t> rawData, int rawDataIndex) : ZRoomCommand(nZRoom, rawData, rawDataIndex)
 {
-	segmentOffset = BitConverter::ToInt32BE(rawData, rawDataIndex + 4) & 0x00FFFFFF;
-
+	segmentOffset = SEG2FILESPACE(BitConverter::ToInt32BE(rawData, rawDataIndex + 4));
 	collisionHeader = CollisionHeader(nZRoom, rawData, segmentOffset);
 
 	string declaration = "";
-	char line[2048];
 	char waterBoxStr[2048];
 
 	if (collisionHeader.waterBoxSegmentOffset != 0)
@@ -21,14 +19,12 @@ SetCollisionHeader::SetCollisionHeader(ZRoom* nZRoom, std::vector<uint8_t> rawDa
 	else
 		sprintf(waterBoxStr, "0");
 
-	sprintf(line, "%i, %i, %i, %i, %i, %i, %i, %s_vertices_%08X, %i, _%s_polygons_%08X, _%s_polygonTypes_%08X, &_%s_camDataList_%08X, %i, %s",
+	declaration += StringHelper::Sprintf("%i, %i, %i, %i, %i, %i, %i, %s_vertices_%08X, %i, _%s_polygons_%08X, _%s_polygonTypes_%08X, &_%s_camDataList_%08X, %i, %s",
 		collisionHeader.absMinX, collisionHeader.absMinY, collisionHeader.absMinZ,
 		collisionHeader.absMaxX, collisionHeader.absMaxY, collisionHeader.absMaxZ,
 		collisionHeader.numVerts, zRoom->GetName().c_str(), collisionHeader.vtxSegmentOffset, collisionHeader.numPolygons,
 		zRoom->GetName().c_str(), collisionHeader.polySegmentOffset, zRoom->GetName().c_str(), collisionHeader.polyTypeDefSegmentOffset,
 		zRoom->GetName().c_str(), collisionHeader.camDataSegmentOffset, collisionHeader.numWaterBoxes, waterBoxStr);
-
-	declaration += line;
 
 	zRoom->parent->AddDeclaration(segmentOffset, DeclarationAlignment::None, DeclarationPadding::Pad16, 44, "CollisionHeader", 
 		StringHelper::Sprintf("_%s_collisionHeader_%08X", zRoom->GetName().c_str(), segmentOffset), declaration);
@@ -103,11 +99,21 @@ CollisionHeader::CollisionHeader(ZRoom* zRoom, std::vector<uint8_t> rawData, int
 			highestPolyType = poly->type;
 	}
 
-	for (int i = 0; i < highestPolyType + 1; i++)
-		polygonTypes.push_back(BitConverter::ToInt64BE(data, polyTypeDefSegmentOffset + (i * 8)));
+	//if (highestPolyType > 0)
+	{
+		for (int i = 0; i < highestPolyType + 1; i++)
+			polygonTypes.push_back(BitConverter::ToInt64BE(data, polyTypeDefSegmentOffset + (i * 8)));
+	}
+	//else
+	//{
+		//int polyTypesSize = abs(polyTypeDefSegmentOffset - camDataSegmentOffset) / 8;
+
+		//for (int i = 0; i < polyTypesSize; i++)
+			//polygonTypes.push_back(BitConverter::ToInt64BE(data, polyTypeDefSegmentOffset + (i * 8)));
+	//}
 
 	if (camDataSegmentOffset != 0)
-		camData = new CameraDataList(zRoom, rawData, camDataSegmentOffset, polyTypeDefSegmentOffset);
+		camData = new CameraDataList(zRoom, rawData, camDataSegmentOffset, polyTypeDefSegmentOffset, polygonTypes.size());
 
 	for (int i = 0; i < numWaterBoxes; i++)
 		waterBoxes.push_back(new WaterBoxHeader(zRoom, rawData, waterBoxSegmentOffset + (i * 16)));
@@ -141,7 +147,7 @@ CollisionHeader::CollisionHeader(ZRoom* zRoom, std::vector<uint8_t> rawData, int
 		}
 
 		if (polySegmentOffset != 0) {
-			zRoom->parent->declarations[polySegmentOffset] = new Declaration(DeclarationAlignment::None, polygons.size() * 16, "CollisionPoly",
+			zRoom->parent->declarations[polySegmentOffset] = new Declaration(DeclarationAlignment::None, polygons.size() * 16, "RoomPoly", // TODO: Change this to CollisionPoly once the struct has been updated
 				StringHelper::Sprintf("_%s_polygons_%08X", zRoom->GetName().c_str(), polySegmentOffset), true, declaration);
 		}
 	}
@@ -149,7 +155,7 @@ CollisionHeader::CollisionHeader(ZRoom* zRoom, std::vector<uint8_t> rawData, int
 	declaration = "";
 	for (int i = 0; i < polygonTypes.size(); i++)
 	{
-		sprintf(line, "\t 0x%08X, 0x%08X, \n",  polygonTypes[i] >> 32, polygonTypes[i] & 0xFFFFFFFF);
+		sprintf(line, "\t 0x%08lX, 0x%08lX, \n",  polygonTypes[i] >> 32, polygonTypes[i] & 0xFFFFFFFF);
 		declaration += line;
 	}
 
@@ -212,13 +218,13 @@ WaterBoxHeader::WaterBoxHeader(ZRoom* zRoom, std::vector<uint8_t> rawData, int r
 	properties = BitConverter::ToInt32BE(data, rawDataIndex + 12);
 }
 
-CameraDataList::CameraDataList(ZRoom* zRoom, std::vector<uint8_t> rawData, int rawDataIndex, int polyTypeDefSegmentOffset)
+CameraDataList::CameraDataList(ZRoom* zRoom, std::vector<uint8_t> rawData, int rawDataIndex, int polyTypeDefSegmentOffset, int polygonTypesCnt)
 {
-	char line[2048];
 	string declaration = "";
 
-	//Parse CameraDataEntries
-	int numElements = (polyTypeDefSegmentOffset - (rawDataIndex)) / 8;
+	// Parse CameraDataEntries
+	int numElements = abs(polyTypeDefSegmentOffset - (rawDataIndex)) / 8;
+	//int numElements = polygonTypesCnt;
 	uint32_t cameraPosDataSeg = rawDataIndex;
 	for (int i = 0; i < numElements; i++)
 	{
@@ -227,10 +233,15 @@ CameraDataList::CameraDataList(ZRoom* zRoom, std::vector<uint8_t> rawData, int r
 		entry->cameraSType = BitConverter::ToInt16BE(rawData, rawDataIndex + (entries.size() * 8) + 0);
 		entry->numData = BitConverter::ToInt16BE(rawData, rawDataIndex + (entries.size() * 8) + 2);
 		entry->cameraPosDataSeg = BitConverter::ToInt32BE(rawData, rawDataIndex + (entries.size() * 8) + 4);
-		if (entry->cameraPosDataSeg != 0 && cameraPosDataSeg > (entry->cameraPosDataSeg & 0xFFFFFF))
+
+		if (entry->cameraPosDataSeg != 0 && GETSEGNUM(entry->cameraPosDataSeg) != 2)
 		{
-			cameraPosDataSeg = (entry->cameraPosDataSeg & 0xFFFFFF);
+			cameraPosDataSeg = rawDataIndex + (entries.size() * 8);
+			break;
 		}
+
+		if (entry->cameraPosDataSeg != 0 && cameraPosDataSeg > (entry->cameraPosDataSeg & 0xFFFFFF))
+			cameraPosDataSeg = (entry->cameraPosDataSeg & 0xFFFFFF);
 
 		entries.push_back(entry);
 	}
@@ -249,13 +260,12 @@ CameraDataList::CameraDataList(ZRoom* zRoom, std::vector<uint8_t> rawData, int r
 		else
 			sprintf(camSegLine, "0x%08X", entries[i]->cameraPosDataSeg);
 
-		sprintf(line, "\t{ 0x%04X, %i, %s }, // 0x%08X\n", entries[i]->cameraSType, entries[i]->numData, camSegLine, rawDataIndex + (i * 8));
-		declaration += line;
+		declaration += StringHelper::Sprintf("\t{ 0x%04X, %i, %s }, // 0x%08X\n", entries[i]->cameraSType, entries[i]->numData, camSegLine, rawDataIndex + (i * 8));
 	}
 
 	zRoom->parent->AddDeclarationArray(rawDataIndex, DeclarationAlignment::None, entries.size() * 8, "CamData", StringHelper::Sprintf("_%s_camDataList_%08X", zRoom->GetName().c_str(), rawDataIndex), entries.size(), declaration);
 
-	int numDataTotal = (rawDataIndex - cameraPosDataOffset) / 0x6;
+	int numDataTotal = abs(rawDataIndex - (int)cameraPosDataOffset) / 0x6;
 
 	if (numDataTotal > 0)
 	{
@@ -265,8 +275,7 @@ CameraDataList::CameraDataList(ZRoom* zRoom, std::vector<uint8_t> rawData, int r
 			CameraPositionData* data = new CameraPositionData(zRoom, rawData, cameraPosDataOffset + (i * 6));
 			cameraPositionData.push_back(data);
 
-			sprintf(line, "\t{ %6i, %6i, %6i }, // 0x%08X\n", data->x, data->y, data->z, cameraPosDataSeg + (i * 0x6));
-			declaration += line;
+			declaration += StringHelper::Sprintf("\t{ %6i, %6i, %6i }, // 0x%08X\n", data->x, data->y, data->z, cameraPosDataSeg + (i * 0x6));;
 		}
 
 		int cameraPosDataIndex = cameraPosDataSeg & 0x00FFFFFF;
