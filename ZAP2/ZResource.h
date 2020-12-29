@@ -13,7 +13,7 @@
 #define SEGMENT_OBJECT 6
 #define SEGMENT_LINKANIMETION 7
 
-#define SEG2FILESPACE(x) (x & 0x00FFFFFF)
+#define SEG2FILESPACE(x) ((uint32_t)(x & 0x00FFFFFF))
 #define GETSEGNUM(x) ((x >> 24) & 0xFF)
 
 class ZFile;
